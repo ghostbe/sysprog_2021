@@ -16,9 +16,13 @@
     int last_ci = sheduler.curr_ci;\
     sheduler.curr_ci = (sheduler.curr_ci+1) % (sheduler.coros_n+1);\
     if (!sheduler.curr_ci) { sheduler.curr_ci++; }\
-    sheduler.coros[last_ci].ttime +=\
-    clock() - sheduler.coros[last_ci].work;\
-    sheduler.coros[sheduler.curr_ci].work = clock();\
+    if (sheduler.coros[last_ci].active) {\
+        sheduler.coros[last_ci].ttime +=\
+        clock() - sheduler.coros[last_ci].work;\
+    }\
+    if (sheduler.coros[sheduler.curr_ci].active) {\
+        sheduler.coros[sheduler.curr_ci].work = clock();\
+    }\
     swapcontext(\
         &sheduler.coros[last_ci].context,\
         &sheduler.coros[sheduler.curr_ci].context\
@@ -28,6 +32,7 @@
 struct coroutine {
     ucontext_t context;
     char* stack;
+    int active;
     clock_t work, ttime;
 };
 
@@ -184,51 +189,37 @@ void print_array(int arr[], int len) {
     return;
 }
 
-int* convert(char* p, int* l) {
-    int res_i = 1;
-    yield();
-    int* res = (int*)malloc(res_i * sizeof(int));
-    yield();
-    char *head = p;
-    yield();
-    char ch[5];
-    yield();
-    int ch_i = 0;
-    yield();    
-    while (*p != '\0') {
-        yield();
-        if (*p == ' ') {
-            yield();
-            p++;
-            yield();
-            res[res_i++-1] = atoi(ch);
-            yield(); 
-            res = (int*)realloc(res, res_i * sizeof(int));
-            yield();
-            memset(ch, '\0', 5);
-            yield(); 
-            ch_i = 0;
-            yield();
-        }
-        yield();
-        ch[ch_i++] = *p++;
-        yield();
+int check_size(FILE *fds) {
+    int count = 0;
+    long n;
+    while (fscanf(fds, "%ld", &n) == 1) {
+        ++count;
     }
-    yield();
-    res[res_i-1] = atoi(ch);
-    yield();
-    *l = res_i;
-    yield();
-    memset(ch, '\0', 5);
-    yield();
-    free(head);
-    yield();
-    return res;
+    return count;
+}
+
+int* convert(char* p, int* l) {
+    FILE *fds = fmemopen(p, strlen(p), "r");
+    *l = check_size(fds);
+    int *result = (int*)malloc(*l * sizeof(int));
+    if (result == NULL) {
+        printf("Malloc error!\n");
+        exit(EXIT_FAILURE);
+    }
+    fseek(fds, 0, SEEK_SET);
+    for (int i = 0; i < *l; ++i) {
+        fscanf(fds, "%d", &result[i]);
+    }
+    return result;
 }
 
 void merge_two_arrays(struct array *a1, struct array *a2) {
     int *p1 = a1->array, *p2 = a2->array;
     int *p3 = (int*)malloc((a1->len+a2->len) * sizeof(int)), *head = p3;
+    if (p3 == NULL) {
+        printf("Malloc error!\n");
+        exit(EXIT_FAILURE);
+    }
 
     while (p1 < a1->array+a1->len && p2 < a2->array+a2->len) {
         if (*p1 <= *p2) { *p3++ = *p1++; }
@@ -267,6 +258,9 @@ void sort() {
     yield();
     data.sorted[sheduler.curr_ci-1].len = result.len;
     yield();
+    sheduler.coros[sheduler.curr_ci].active = 0;
+    sheduler.coros[sheduler.curr_ci].ttime += \
+    clock() - sheduler.coros[sheduler.curr_ci].work;
     sheduler.working_coros--;
     while (sheduler.working_coros) { yield(); }
     return;
@@ -274,6 +268,10 @@ void sort() {
 
 void* allocate_stack() {
     void* stack = (void*)malloc(stack_size);
+    if (stack == NULL) {
+        printf("Malloc error!\n");
+        exit(EXIT_FAILURE);
+    }
     stack_t ss;
     ss.ss_sp = stack;
     ss.ss_size = stack_size;
@@ -285,13 +283,17 @@ void* allocate_stack() {
 void init() {
     sheduler.coros = (struct coroutine*)malloc(
         (sheduler.coros_n+1) * sizeof(struct coroutine));
+    if (sheduler.coros == NULL) {
+        printf("Malloc error!\n");
+        exit(EXIT_FAILURE);
+    }
     for (int i = 1; i <= sheduler.coros_n; i++) {
         if (getcontext(&sheduler.coros[i].context) == -1) {
             printf("Can't get context");
             exit(EXIT_FAILURE);
         }
         sheduler.coros[i].ttime = 0;
-
+        sheduler.coros[i].active = 1;
         sheduler.coros[i].work = 0;
         sheduler.coros[i].stack = allocate_stack();
         sheduler.coros[i].context.uc_stack.ss_sp = sheduler.coros[i].stack;
@@ -301,7 +303,7 @@ void init() {
 
     }
 
-    sheduler.coros[1].work = clock();
+    // sheduler.coros[1].work = clock();
     return;
 }
 
@@ -317,7 +319,7 @@ void write_to() {
 
 void duration() {
     for (int i = 1; i <= sheduler.coros_n; i++) {
-        printf("Coro %d executed in %f seconds.\n", i, (double)sheduler.coros[i].ttime / CLOCKS_PER_SEC);
+        printf("Coro %d executed in %ld ms.\n", i, sheduler.coros[i].ttime * 100000 / CLOCKS_PER_SEC);
     }
     printf("\n");
 }
@@ -346,6 +348,10 @@ int main(int argc, char** argv) {
     data.files = &argv[1];
     data.files_n = argc - 1;
     data.sorted = (struct array*)malloc(data.files_n * sizeof(struct array));
+    if (data.sorted == NULL) {
+        printf("Malloc error!\n");
+        exit(EXIT_FAILURE);
+    }
 
     printf("Starting sorting files...\n");
     clock_t start = clock();
@@ -358,8 +364,8 @@ int main(int argc, char** argv) {
     free_all();
 
     clock_t end = clock();
-    printf("Program executed in %f seconds\n",
-            (double)(end-start) / CLOCKS_PER_SEC);
+    printf("Program executed in %ld ms.\n",
+            (end-start) * 100000 / CLOCKS_PER_SEC);
 
     return 0;
 }
