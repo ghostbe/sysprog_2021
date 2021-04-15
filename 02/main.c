@@ -51,7 +51,7 @@ int ns;
 
 void free_memory(struct cmd *head); // free
 
-int error(char *message, int fatal) { // error handler
+int error(const char *message, int fatal) { // error handler
     fprintf(stderr, "%s\n", message);
     if (fatal) {
         free_memory(head);
@@ -166,20 +166,41 @@ void slash(char *str) {
     return;
 }
 
+void white(char *str) {
+    char *p = str;
+    for (int i = 0; i < MAX_STR; i++) {
+        if (p[i] == '\\') {
+            if (p[i+1] == '#') {
+                p = str;
+                int g = 0;
+                for (int k = 0; k < MAX_STR; k++) {
+                    if (p[k] == '\\' && p[k+1] == '#') {
+                        str[g++] = ' ';
+                        k++;
+                        continue;
+                    }
+                    str[g++] = p[k];
+                }
+                return;
+            }
+        }
+    }
+}
+
 void newl(char *str) {
     char *p = str;
     for (int i = 0; i < MAX_STR; i++) {
-            if (p[i] == '$') {
+            if (p[i] == '+') {
                 p[i] = '\n';
             }
     }
 }
 
-int skipto(char *str, char *sep) {
+int skipto(char *str, const char *sep) {
     for (int i = 0; i < MAX_STR; ++i) {
         if (str[i] == 0)
             return 0;
-        for (int j = 0; j < strlen(sep); ++j) {
+        for (int j = 0; j < (int)strlen(sep); ++j) {
             if (str[i] == sep[j])
                 return i;
         }
@@ -188,13 +209,13 @@ int skipto(char *str, char *sep) {
     return error("Skip error: bad syntax in command.", 1);
 }
 
-int skipon(char *str,char *sep) {
+int skipon(char *str, const char *sep) {
     int k;
     for (int i = 0; i < MAX_STR; ++i) {
         k = 0;
         if (str[i] == 0)
             return 0;
-        for (int j = 0; j < strlen(sep); ++j) {
+        for (int j = 0; j < (int)strlen(sep); ++j) {
             if (str[i] == sep[j])
                 ++k;
         }
@@ -250,19 +271,20 @@ void get_token() {
 char **get_name(int size, char *cmd) {
     char **tmp = (char **)malloc(2 * sizeof(char *));
     *tmp = (char *)malloc((size+1) * sizeof(char));
-    strncpy(*tmp, cmd, size);
+    // strncpy(*tmp, cmd, size);
+    memcpy(*tmp, cmd, size);
     (*tmp)[size] = '\0';
     *(tmp+1) = NULL;
 
     return tmp;
 }
 
-char **get_arg(char **head, int size, char *cmd) {
+char **get_arg(char **h, int size, char *cmd) {
     int i = 0;
-    char **tmp = head;
+    char **tmp = h;
     while (*(tmp++))
         ++i;
-    tmp = (char **)realloc(head, (i+2) * sizeof(char *));
+    tmp = (char **)realloc(h, (i+2) * sizeof(char *));
     *(tmp+i) = (char *)malloc(sizeof(char) * (size+1));
 
     strncpy(*(tmp+i), cmd, size);
@@ -307,7 +329,7 @@ struct cmd *get_simple_command() {
     end += len;
     len = skipto(command+end, " <>|\n");
     if (len == 0)
-        error("Empty command.", 1);
+                longjmp(point, 1);
     this->argv = get_name(len, command+end);
     // print_cmd(this, "1. get_simple_command::this");
     end += len;
@@ -360,9 +382,9 @@ struct cmd *get_simple_command() {
         len = skipon(command+end, " ");
         end += len;
 
-        int flag = 0;
+        // int flag = 0;
         if (command[end] == '"') {
-            flag = 1;
+            // flag = 1;
             for (int i = 1; i < MAX_STR; i++) {
                 if (command[end+i] == '"') {
                     len = i-1;
@@ -371,7 +393,7 @@ struct cmd *get_simple_command() {
                 }
             }
         } else if (command[end] == '\'') {
-            flag = 1;
+            // flag = 1;
             for (int i = 1; i < MAX_STR; i++) {
                 if (command[end+i] == '\'') {
                     len = i-1;
@@ -494,7 +516,7 @@ int execute (struct cmd *cmdstruc, int ispipe) {
     int status;
     int fd[2];
     int in, out;
-    pid_t curpid;
+    pid_t curpid = 0;
 
     if (cmdstruc) {
         if (cmdstruc->argv || cmdstruc->subcmd) {
@@ -547,8 +569,12 @@ int execute (struct cmd *cmdstruc, int ispipe) {
                     }
                     if (cmdstruc->argv) {
                         if (cmdstruc->argv[1] != NULL) {
-                            slash(cmdstruc->argv[1]);
+                            // print_cmd(cmdstruc, "1");
+                            // slash(cmdstruc->argv[1]);
+                            white(cmdstruc->argv[1]);
+                            // print_cmd(cmdstruc, "2");
                             newl(cmdstruc->argv[1]);
+                            // print_cmd(cmdstruc, "3");
                         }
                         if (execvp(cmdstruc->argv[0], cmdstruc->argv))
                             printf("%s - unknown command\n", cmdstruc->argv[0]);
@@ -622,60 +648,109 @@ void free_memory(struct cmd *cmdstruc) {
 
 
 char *readl() {
-    char c, *buffer = NULL;
+    char c, *buff = NULL;
     int i = 0, quote1 = 0, quote2 = 0;
     while ((c = getchar()) != EOF) {
         if (c == '\\') {
-            if (buffer[i-1] == '\\') {
+            if (buff[i-1] == '\\') {
                 continue;
+            } else {
+                c = getchar();
+                if (c == '"') {
+                    buff = (char *)realloc(buff, ++i * sizeof(char));
+                    buff[i-1] = c;
+                    continue;
+                }
             }
         }
         if (c == ' ') {
-            if (buffer != NULL)
-                if (buffer[i-1] == '\"' && buffer[i-2] == '\\' && !quote2) {
-                    quote1 = ++quote1 % 2;
+            if (buff != NULL)
+                if (buff[i-1] == '\"' && buff[i-2] == '\\' && !quote2) {
+                    quote1 = (quote1+1) % 2;
                 }
+            if (c == ' ') {
+                buff = (char *)realloc(buff, ++i * sizeof(char));
+                buff[i-1] = c;
+                continue;
+            }
         }
         if (c == '#' && !quote1 && !quote2) while ((c = getchar()) != '\n');
         if (c == '\"' && quote2 % 2 == 0) {
             if (buffer[i-1] != '\\' || !quote1) {
-                quote1 = ++quote1 % 2;
+                quote1 = (quote1+1) % 2;
             }
         }
         if (c == '\'' && quote1 % 2 == 0) {
             if (buffer[i-1] != '\\' || !quote2) {
-                quote2 = ++quote2 % 2;
+                quote2 = (quote2+1) % 2;
             }
         }
 
         if (c == '\n' && !quote1 && !quote2) {
-            if (c == '\n' && buffer != NULL && buffer[i-1] == '\\') {
-                printf("%s", INVITE);
+            if (c == '\n' && buffer != NULL && buff[i-1] == '\\') {
+                // printf("%s", INVITE);
                 --i;
                 continue;
             }
             i += 2;
-            buffer = (char *)realloc(buffer, i * sizeof(char));
-            buffer[i-2] = '\n';
-            buffer[i-1] = '\0';
-            return buffer;
+            buff = (char *)realloc(buff, i * sizeof(char));
+            buff[i-2] = '\n';
+            buff[i-1] = '\0';
+            return buff;
         }
         if (c == '\n' && quote1) {
-            buffer = (char *)realloc(buffer, ++i * sizeof(char));
-            buffer[i-1] = '$';
+            buff = (char *)realloc(buff, ++i * sizeof(char));
+            buff[i-1] = '+';
             continue;
         }
-        buffer = (char *)realloc(buffer, ++i * sizeof(char));
-        buffer[i-1] = c;
+        buff = (char *)realloc(buff, ++i * sizeof(char));
+        buff[i-1] = c;
     }
 
     return NULL;
 
 }
 
+char *readit() {
+    char c, *buff = NULL;
+    int i = 0, quote1 = 0, quote2 = 0;
+    while ((c = getchar()) != EOF) {
+        // printf("[%c] ", c);
+        buff = (char *)realloc(buff, ++i * sizeof(char));
+        if (c == '#') while ((c = getchar()) != '\n');
+        if (c == '\\') {
+            buff[i-1] = c;
+            int j = 1;
+            while ((c = getchar()) == '\\') j++;
+            // if (c == 'n') {
+            //     buff = (char *)realloc(buff, ++i * sizeof(char));
+            //     buff[i-1] = c;
+            //     printf("buffer = [%s]\n", buff);
+            //     continue;
+            // }
+            if (j == 1) {
+                buff[i-1] = c;
+            } else {
+                buff = (char *)realloc(buff, ++i * sizeof(char));
+                buff[i-1] = c;
+            }
+            continue;
+        }
+        if (c == '\n') {
+            buff = (char *)realloc(buff, i * sizeof(char));
+            buff[i-2] = '\n';
+            buff[i-1] = '\0';
+            printf("buffer = [%s]\n", buff);
+            return buff;
+        }
+        buff[i-1] = c;
+    }
+}
+
 
 
 int main(int argc, char **argv) {
+    // readit();
     while (1) {
         do {
             setjmp(point);
@@ -683,12 +758,14 @@ int main(int argc, char **argv) {
             token[0] = 0;
             cursor = 0;
             print_list();
-            printf("%s", INVITE);
+            // printf("%s", INVITE);
             char *str = readl();
-
+            printf("Str: [%s]", str);
+            // char *str = readit();
             if (!str)
                 exit(0);
-            strncpy(buffer, str, strlen(str));
+            memcpy(buffer, str, strlen(str));
+            // strncpy(buffer, str, strlen(str));
             get_token();
         } while (!(head = parse()));
         execute(head, 0);
